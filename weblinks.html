@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>WebLinks - 网页收藏</title>
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 text-gray-900">
+<div class="max-w-4xl mx-auto p-4 space-y-4">
+
+  <h1 class="text-2xl font-bold">网页收藏 (WebLinks)</h1>
+
+  <!-- 搜索 -->
+  <input
+    id="searchInput"
+    class="w-full p-2 border rounded"
+    placeholder="简码 ｜ -名称 ｜ =URL"
+  />
+
+  <!-- URL 参数输入 -->
+  <input
+    id="paramInput"
+    class="w-full p-2 border rounded"
+    placeholder="可选：打开链接时替换 %s"
+  />
+
+  <!-- 导入 / 导出 -->
+  <div class="flex gap-2">
+    <button id="exportBtn" class="px-3 py-2 bg-green-600 text-white rounded">导出数据</button>
+    <button id="importBtn" class="px-3 py-2 bg-gray-400 text-white rounded cursor-not-allowed" disabled>导入数据（需先导出）</button>
+    <input id="importFile" type="file" accept=".json" class="hidden" />
+  </div>
+
+  <!-- 添加 / 编辑 -->
+  <div class="grid grid-cols-5 gap-2">
+    <input id="codeInput" class="p-2 border rounded" placeholder="简码" />
+    <input id="titleInput" class="p-2 border rounded col-span-2" placeholder="网页名称" />
+    <input id="urlInput" class="p-2 border rounded col-span-2" placeholder="URL" />
+  </div>
+
+  <div class="flex gap-2">
+    <button id="saveBtn" class="px-4 py-2 bg-blue-600 text-white rounded">添加</button>
+    <button id="cancelBtn" class="px-4 py-2 bg-gray-400 text-white rounded hidden">取消</button>
+  </div>
+
+  <!-- 列表 -->
+  <ul id="list" class="space-y-2"></ul>
+  <div id="loadMore" class="text-center text-gray-500 py-4 hidden">下滑加载更多…</div>
+
+</div>
+
+<script>
+/* ========= DOM ========= */
+const listEl = document.getElementById("list")
+const loadMore = document.getElementById("loadMore")
+const searchInput = document.getElementById("searchInput")
+const paramInput = document.getElementById("paramInput")
+const saveBtn = document.getElementById("saveBtn")
+const cancelBtn = document.getElementById("cancelBtn")
+const codeInput = document.getElementById("codeInput")
+const titleInput = document.getElementById("titleInput")
+const urlInput = document.getElementById("urlInput")
+const exportBtn = document.getElementById("exportBtn")
+const importBtn = document.getElementById("importBtn")
+const importFile = document.getElementById("importFile")
+
+/* ========= 数据 ========= */
+const BOOKMARK_KEY = "bookmarks"
+const CLICKLOG_KEY = "clickLogs"
+const EXPORTED_FLAG = "hasExported"
+const COUNT_INTERVAL_KEY = "clickInterval"
+
+let clickInterval = parseInt(localStorage.getItem(COUNT_INTERVAL_KEY)) || 3600000 // ms
+
+let bookmarks = JSON.parse(localStorage.getItem(BOOKMARK_KEY)) || [
+  {id:"wlks", code:"wlks", title:"WebLinks - funhuman", url:"https://funhuman.github.io/wlks", clickCount:0, lastCounted:0, updatedAt:Date.now()},
+]
+let clickLogs = JSON.parse(localStorage.getItem(CLICKLOG_KEY)) || []
+
+function saveData() {
+  localStorage.setItem(BOOKMARK_KEY, JSON.stringify(bookmarks))
+  localStorage.setItem(CLICKLOG_KEY, JSON.stringify(clickLogs))
+  localStorage.setItem(COUNT_INTERVAL_KEY, clickInterval)
+}
+
+/* ========= 工具 ========= */
+const uid = () => Math.random().toString(36).slice(2, 9)
+const formatISO = ts => {
+  const d = new Date(ts)
+  const p = n=>String(n).padStart(2,"0")
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+}
+const formatTime = ts => formatISO(ts).replace("T"," ")
+
+/* ========= 导出 / 导入 ========= */
+exportBtn.onclick = () => {
+  const exportBookmarks = bookmarks.map(b => ({
+    ...b,
+    updatedAt: formatISO(b.updatedAt),
+    lastCounted: b.lastCounted ? formatISO(b.lastCounted) : null
+  }));
+  const exportClickLogs = clickLogs.map(c => ({
+    ...c,
+    clickedAt: formatISO(c.clickedAt)
+  }));
+  const data = { config: { clickInterval }, bookmarks: exportBookmarks, clickLogs: exportClickLogs };
+
+  const jsonStr = JSON.stringify(data, null, 2);
+  const now = new Date();
+  const pad = n => String(n).padStart(2, "0");
+  const fileName = `weblinksdata_${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}.json`;
+
+  const blob = new Blob([jsonStr], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = fileName;
+  a.click();
+  localStorage.setItem(EXPORTED_FLAG, "true");
+  unlockImport();
+};
+
+function unlockImport() {
+  importBtn.disabled = false
+  importBtn.classList.remove("bg-gray-400","cursor-not-allowed")
+  importBtn.classList.add("bg-orange-600")
+  importBtn.textContent = "导入数据（覆盖）"
+}
+
+if(localStorage.getItem(EXPORTED_FLAG)==="true") unlockImport()
+
+importBtn.onclick = () => importFile.click()
+
+importFile.onchange = e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const data = JSON.parse(reader.result);
+      bookmarks = (data.bookmarks || []).map(b => ({
+        ...b,
+        updatedAt: new Date(b.updatedAt).getTime(),
+        lastCounted: b.lastCounted ? new Date(b.lastCounted).getTime() : 0
+      }));
+      clickLogs = (data.clickLogs || []).map(c => ({
+        ...c,
+        clickedAt: new Date(c.clickedAt).getTime()
+      }));
+      if (data.config && data.config.clickInterval) clickInterval = data.config.clickInterval;
+      saveData();
+      render();
+      alert("导入成功");
+    } catch (err) {
+      alert("导入失败：" + err);
+    }
+  };
+  reader.readAsText(file);
+};
+
+/* ========= 渲染 ========= */
+let visibleCount = 20
+function render(){
+  const kw = searchInput.value.trim().toLowerCase()
+  let list = bookmarks
+  if(kw.startsWith("-")) list = bookmarks.filter(b=>b.title.toLowerCase().includes(kw.slice(1)))
+  else if(kw.startsWith("=")) list = bookmarks.filter(b=>b.url.toLowerCase().includes(kw.slice(1)))
+  else if(kw) list = bookmarks.filter(b=>b.code.toLowerCase().includes(kw))
+  list = list.sort((a,b)=>b.clickCount!==a.clickCount?b.clickCount-a.clickCount:b.updatedAt-a.updatedAt)
+  const show = kw?list:list.slice(0,visibleCount)
+  listEl.innerHTML = ""
+  show.forEach(b=>{
+    const li=document.createElement("li")
+    li.className="bg-white p-3 rounded shadow flex justify-between items-center cursor-pointer hover:bg-gray-50"
+    li.innerHTML=`<div class="flex-1 truncate">
+      <div class="font-semibold">${b.code} · ${b.title}</div>
+      <div class="text-sm text-gray-500 truncate">${b.url}</div>
+      <div class="text-xs text-gray-400">点击 ${b.clickCount} · ${formatTime(b.updatedAt)}</div>
+    </div>
+    <div class="flex gap-2 ml-2">
+      <button class="open px-2 py-1 bg-green-600 text-white rounded">打开</button>
+      <button class="edit px-2 py-1 bg-yellow-500 text-white rounded">编辑</button>
+    </div>`
+    li.onclick = e => {
+      if(e.ctrlKey||e.metaKey){ countClick(b); return }
+      if(e.target.classList.contains("open")||e.target.classList.contains("edit")) return
+      li.querySelector(".open").click()
+    }
+    li.querySelector(".open").onclick = e=>{ e.stopPropagation(); openBookmark(b) }
+    li.querySelector(".edit").onclick = e=>{ e.stopPropagation(); editBookmark(b) }
+    listEl.appendChild(li)
+  })
+  loadMore.classList.toggle("hidden", kw || visibleCount>=list.length)
+}
+
+/* ========= 打开 + 计数 + 参数替换 ========= */
+function openBookmark(b){
+  const param = paramInput.value.trim()
+  let url = b.url
+  if(param) url = url.replace(/%s/g, encodeURIComponent(param))
+  window.open(url,"_blank")
+  countClick(b)
+}
+
+function countClick(b){
+  const now = Date.now()
+  if(!b.lastCounted || now-b.lastCounted >= clickInterval){
+    b.clickCount++
+    b.lastCounted = now
+    b.updatedAt = now
+    clickLogs.push({bookmarkId:b.id, clickedAt:now, count:1})
+    saveData()
+    render()
+  }
+}
+
+/* ========= 编辑 ========= */
+let editing = null
+saveBtn.onclick = ()=>{
+  const code = codeInput.value.trim()
+  const title = titleInput.value.trim()
+  const url = urlInput.value.trim()
+  if(!code||!title||!url) return alert("请填写完整")
+  if(editing){
+    Object.assign(editing,{code,title,url,updatedAt:Date.now()})
+  } else {
+    bookmarks.push({id:uid(), code, title, url, clickCount:0,lastCounted:0,updatedAt:Date.now()})
+  }
+  resetForm()
+  saveData()
+  render()
+}
+
+function editBookmark(b){
+  editing = b
+  codeInput.value = b.code
+  titleInput.value = b.title
+  urlInput.value = b.url
+  saveBtn.textContent="修改"
+  cancelBtn.classList.remove("hidden")
+}
+
+function resetForm(){
+  editing=null
+  codeInput.value = titleInput.value = urlInput.value = ""
+  saveBtn.textContent="添加"
+  cancelBtn.classList.add("hidden")
+}
+
+cancelBtn.onclick = resetForm
+
+/* ========= 搜索 & 下滑加载 ========= */
+searchInput.oninput = ()=>{ visibleCount=20; render() }
+window.onscroll = ()=>{
+  if(innerHeight+scrollY>=document.body.offsetHeight-50){
+    visibleCount+=20
+    render()
+  }
+}
+
+/* ========= 初始渲染 ========= */
+render()
+</script>
+</body>
+</html>
